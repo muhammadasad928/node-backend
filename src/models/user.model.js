@@ -32,10 +32,10 @@ const userSchema = new mongoose.Schema(
     coverImage: {
       type: String,
     },
-    watchHistory: {
+    watchHistory: [{
       type: mongoose.Schema.Types.ObjectId,
       ref: "Video",
-    },
+    }],
     password: {
       type: String,
       required: [true, "Password is required"],
@@ -48,8 +48,8 @@ const userSchema = new mongoose.Schema(
 );
 
 userSchema.pre("save", async function (next) {
-  if (!this.Modified("password")) return next();
-  this.password = bcrypt.hash(this.password, 8);
+  if (!this.isModified("password")) return next();
+  this.password = await bcrypt.hash(this.password, 8);
   next();
 });
 
@@ -72,14 +72,14 @@ userSchema.methods.generateAccessToken =  function () {
   );
 };
 
-userSchema.methods.generateRefereshToken = async function () {
+userSchema.methods.generateRefereshToken = function () {
     return jwt.sign(
         {
           _id: this._id
         },
-        process.env.REFERESH_TOKEN_SECRET,
+        process.env.REFRESH_TOKEN_SECRET,
         {
-            expiresIn: process.env.REFERESH_TOKEN_EXPIRY
+            expiresIn: process.env.REFRESH_TOKEN_EXPIRY
         }
       );
 };
