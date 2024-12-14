@@ -199,7 +199,7 @@ const changeCurrentPassword = asyncHandler(async (req, res, next) => {
   const { oldPassword, newPassword } = req.body;
 
   const user = await User.findById(req.user?._id);
-  const isPasswordCorrect = user.isPasswordCorrect(oldPassword);
+  const isPasswordCorrect = await user.isPasswordCorrect(oldPassword);
 
   if (!isPasswordCorrect) {
     throw new ApiError(400, "Old Password is incorrect");
@@ -216,7 +216,7 @@ const changeCurrentPassword = asyncHandler(async (req, res, next) => {
 const getCurrentUser = asyncHandler(async (req, res, next) => {
   return res
     .status(200)
-    .json(200, req.user, "current user fetched successfully");
+    .json(new ApiResponse(200, req.user, "current user fetched successfully"));
 });
 
 const updateAccountInfo = asyncHandler(async (req, res, next) => {
@@ -226,7 +226,12 @@ const updateAccountInfo = asyncHandler(async (req, res, next) => {
     throw new ApiError(400, "All fields are required");
   }
 
-  User.findByIdAndUpdate(
+  // validate email
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    throw new ApiError(400, "Email format is incorrect");
+  }
+  await User.findByIdAndUpdate(
     req.user?._id,
     {
       $set: {
@@ -242,179 +247,186 @@ const updateAccountInfo = asyncHandler(async (req, res, next) => {
     .json(new ApiResponse(200, "Account details updated successfully"));
 });
 
-const updateAvatar = asyncHandler(async(req, res, next) =>{
-    const avatarLocalPath = req.file?.path
-    if(!avatarLocalPath){
-        throw new ApiError(400, "Avatar file is missing")
+const updateAvatar = asyncHandler(async (req, res, next) => {
+  const avatarLocalPath = req.file?.path;
+  if (!avatarLocalPath) {
+    throw new ApiError(400, "Avatar file is missing");
+  }
+
+  const avatar = await uploadOnCloudinary(avatarLocalPath);
+  if (!avatar.url) {
+    throw new ApiError(400, "Error While Uploading avatar");
+  }
+
+  await User.findByIdAndUpdate(
+    req.user?._id,
+    {
+      $set: {
+        avatar: avatar.url,
+      },
+    },
+    {
+      new: true,
     }
+  ).select("-password -refreshToken");
 
-    const avatar = await uploadOnCloudinary(avatarLocalPath)
-    if(!avatar.url){
-        throw new ApiError(400, "Error While Uploading avatar")
+  return res
+    .status(200)
+    .json(new ApiResponse(200, "Avatar updated successfully"));
+});
+
+const updateUserCoverImage = asyncHandler(async (req, res, next) => {
+  const userCoverImageLocalPath = req.file?.path;
+  if (!userCoverImageLocalPath) {
+    throw new ApiError(400, "Cover Image file is missing");
+  }
+
+  const coverImage = await uploadOnCloudinary(userCoverImageLocalPath);
+  if (!coverImage.url) {
+    throw new ApiError(400, "Error While Uploading Cover Image");
+  }
+
+  await User.findByIdAndUpdate(
+    req.user?._id,
+    {
+      $set: {
+        coverImage: coverImage.url,
+      },
+    },
+    {
+      new: true,
     }
+  ).select("-password -refreshToken");
 
-    await User.findByIdAndUpdate(
-        req.user?._id,
-        {
-            $set: {
-                avatar: avatar.url
-            }
+  return res
+    .status(200)
+    .json(new ApiResponse(200, "Cover Image updated successfully"));
+});
+
+const getUserChannelProfile = asyncHandler(async (req, res, next) => {
+  const { username } = req.params;
+
+  if (!username?.trim()) {
+    throw new ApiError(400, "username is missing");
+  }
+
+  const channel = await User.aggregate([
+    {
+      $match: {
+        username: username?.toLowerCase(),
+      },
+    },
+    {
+      $lookup: {
+        from: "subscriptions",
+        localField: "_id",
+        foreignField: "channel",
+        as: "subscribers",
+      },
+    },
+    {
+      $lookup: {
+        from: "subscriptions",
+        localField: "_id",
+        foreignField: "subscriber",
+        as: "subscribedTo",
+      },
+    },
+    {
+      $addFields: {
+        subscriberCount: {
+          $size: "$subscribers",
         },
-        {
-            new: true
-        }
-    ).select("-password -refreshToken")
-
-    return res.status(200)
-    .json(new ApiResponse(200, "Avatar updated successfully"))
-})
-
-const updateUserCoverImage = asyncHandler(async(req, res, next) =>{
-    const userCoverImageLocalPath = req.file?.path
-    if(!userCoverImageLocalPath){
-        throw new ApiError(400, "Cover Image file is missing")
-    }
-
-    const coverImage = await uploadOnCloudinary(userCoverImageLocalPath)
-    if(!coverImage.url){
-        throw new ApiError(400, "Error While Uploading Cover Image")
-    }
-
-    await User.findByIdAndUpdate(
-        req.user?._id,
-        {
-            $set: {
-                coverImage: coverImage.url
-            }
+        channelSubscriberToCount: {
+          $size: "$subscribedTo",
         },
-        {
-            new: true
-        }
-    ).select("-password -refreshToken")
-
-    return res.status(200)
-    .json(new ApiResponse(200, "Cover Image updated successfully"))
-})
-
-const getUserChannelProfile = asyncHandler(async(req, res, next) =>{
-    const {username} = req.params
-
-    if(!username?.trim()){
-        throw new ApiError(400, "username is missing")
-    }
-
-    const channel = await User.aggregate([
-        {
-            $match:{
-                username: username?.toLowerCase()
-            }
+        isSubscribed: {
+          $cond: {
+            if: { $in: [req.user?._id, "$subscribers.subscriber"] },
+            then: true,
+            else: false,
+          },
         },
-        {
-            $lookup:{
-                from: "subscriptions",
-                localField: "_id",
-                foreignField: "channel",
-                as: "subscribers"
-            }
-        },
-        {
-            $lookup:{
-                from: "subscriptions",
-                localField: "_id",
-                foreignField: "subscriber",
-                as: "subscribedTo"
-            }
-        },
-        {
-            $addFields: {
-                subscriberCount: {
-                    $size: "$subscribers"
-                },
-                channelSubscriberToCount: {
-                    $size: "$subscribedTo"
-                },
-                isSubscribed: {
-                    $cond: {
-                        if: {$in: [req.user?._id, "$subscribers.subscriber"]},
-                        then: true,
-                        else: false
-                    }
-                }
-            }
-        },
-        {
-            $project: {
-                fullName: 1,
-                username: 1,
-                subscriberCount: 1,
-                channelSubscriberToCount: 1,
-                isSubscribed: 1,
-                avatar: 1,
-                coverImage: 1
-            }
-        }
-    ])
+      },
+    },
+    {
+      $project: {
+        fullName: 1,
+        username: 1,
+        subscriberCount: 1,
+        channelSubscriberToCount: 1,
+        isSubscribed: 1,
+        avatar: 1,
+        coverImage: 1,
+      },
+    },
+  ]);
 
-    if(!channel?.length){
-        throw new ApiError(404, "Channel does not exists")
-    }
+  if (!channel?.length) {
+    throw new ApiError(404, "Channel does not exists");
+  }
 
-    return res.status(200)
-    .json(new ApiResponse(200, channel[0]), "User Channel Fetched Successfully")
-})
-
-const getWatchHistory = asyncHandler(async (req, res, next) =>{
-    const user = await User.aggregate([
-        {
-            $match: {
-                _id: new mongoose.Types.ObjectId(req.user?._id)
-            }
-        },
-        {
-            $lookup: {
-                from: "videos",
-                localField: "watchHistory",
-                foreignField: "_id",
-                as: "watchHistory",
-                pipeline: [
-                    {
-                        $lookup: {
-                            from: "users",
-                            localField: "owner",
-                            foreignField: "_id",
-                            as: "owner",
-                            pipeline: [
-                                {
-                                    $project: {
-                                        fullName: 1,
-                                        username: 1,
-                                        avatar: 1
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    {
-                        $addFields: {
-                            owner: {
-                                $first: "$owner"
-                            }
-                        }
-                    }
-                ] 
-            }
-        }
-    ])
-
-    return res.status(200)
+  return res
+    .status(200)
     .json(
-        new ApiResponse(
-            200,
-            user[0].watchHistory,
-            "Watch History Fetched sucessfully"
-        )
-    )
-})
+      new ApiResponse(200, channel[0]),
+      "User Channel Fetched Successfully"
+    );
+});
+
+const getWatchHistory = asyncHandler(async (req, res, next) => {
+  const user = await User.aggregate([
+    {
+      $match: {
+        _id: new mongoose.Types.ObjectId(req.user?._id),
+      },
+    },
+    {
+      $lookup: {
+        from: "videos",
+        localField: "watchHistory",
+        foreignField: "_id",
+        as: "watchHistory",
+        pipeline: [
+          {
+            $lookup: {
+              from: "users",
+              localField: "owner",
+              foreignField: "_id",
+              as: "owner",
+              pipeline: [
+                {
+                  $project: {
+                    fullName: 1,
+                    username: 1,
+                    avatar: 1,
+                  },
+                },
+              ],
+            },
+          },
+          {
+            $addFields: {
+              owner: {
+                $first: "$owner",
+              },
+            },
+          },
+        ],
+      },
+    },
+  ]);
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        user[0].watchHistory,
+        "Watch History Fetched sucessfully"
+      )
+    );
+});
 
 export {
   registerUser,
@@ -427,5 +439,5 @@ export {
   updateAvatar,
   updateUserCoverImage,
   getUserChannelProfile,
-  getWatchHistory
+  getWatchHistory,
 };
